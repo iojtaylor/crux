@@ -1,5 +1,4 @@
-(ns crux.entity-cache-test
-  "Sanity check test for cached version of entities index"
+(ns crux-microbench.entity-cache-test
   (:require [clojure.test :as t]
             [crux.fixtures :as f]
             [crux.bench :as bench-tools]
@@ -224,3 +223,109 @@
     (println "\n")
     (t/is true)))
 
+
+(defn do-plot-data []
+  (reset! test-times (read-string (slurp "test-times.edn")))
+  (reset! sync-times (read-string (slurp "sync-times.edn")))
+  (doseq [sc (range 1000 11000 1000)
+          hd (cons 1 (range 10 110 10))]
+    (if-not false ;(contains? @test-times [sc hd :q1 true])
+      (binding [run-entity-cache-tests? true
+                stocks-count sc
+                history-days hd]
+        (println "starting a case for " sc hd)
+        (t/run-tests 'crux.entity-cache-test)
+        (spit "sync-times.edn" (pr-str @sync-times))
+        (spit "test-times.edn" (pr-str @test-times)))
+      (println :skipping-key [sc hd :q1 true]))))
+
+; (do-plot-data)
+
+; (reset! test-times (read-string (slurp "test-times.edn")))
+; (get @test-times [10000 1 :q3 false])
+
+(defn res->matrix [values]
+  (let [hday-set   (->> (map :history-days values) set sort)
+        scount-set (->> (map :stocks-count values) set sort)]
+    {:x {:title "History size (10x)" ; hd
+         :ticks hday-set}
+     :y {:title "Stocks count (1000x)"
+         :ticks scount-set}
+     :data
+     (for [sc scount-set
+           :let [local-values (filter #(= sc (:stocks-count %)) values)]]
+       (for [hd hday-set]
+         (:avg (first (filter #(= hd (:history-days %)) local-values)) 0)))}))
+
+; (res->matrix t)
+
+(defn with-matrix [[k v]]
+  [k (res->matrix v)])
+
+(defn untangle-plot-data [plot-data]
+  (let [entry->v
+        (fn [[k v]]
+          (let [[stocks-count history-days query-id cache-on?] k]
+            (-> v
+                (dissoc :durations)
+                (assoc  :stocks-count stocks-count
+                        :query-id query-id
+                        :cache-on? cache-on?
+                        :history-days history-days))))
+        mash (map entry->v plot-data)
+        key-fn (fn [{:keys [cache-on? query-id]}]
+                 (keyword (str (name query-id) (if cache-on? "-with-cache"))))
+        per-query-data (group-by key-fn mash)
+        plots-data (into {} (map with-matrix per-query-data))]
+    (spit "plots-data.edn" (pr-str plots-data))))
+
+; (untangle-plot-data (read-string (slurp "test-times.edn")))
+
+(comment
+
+  (def s (read-string (slurp "plots-data.edn")))
+
+  (def q3 (:q3 s))
+
+  (def q3-data (:data q3))
+
+  (clojure.pprint/pprint q3-data)
+
+  (require '[crux.api :as api])
+
+  (def node
+    (api/start-standalone-node
+      {:db-dir        "console-data"
+       :event-log-dir "console-data-log"
+       :kv-backend    "crux.kv.rocksdb.RocksKv"}))
+
+  (api/q (api/db node) '{:find [e] :where [[e :crux.db/id]]})
+
+  (defn upload-fiddle-data []
+    (binding [history-days 10
+              stocks-count 10]
+      (upload-stocks-with-history node)))
+
+
+
+  (api/history node :stock.id/company-8)
+
+  (api/history-range node :stock.id/company-8)
+
+  (def e-hist (api/history-range node :stock.id/company-8 nil nil nil nil))
+
+  (def e1 (first e-hist))
+
+  (api/document node (:crux.db/content-hash e1))
+
+  (api/entity (api/db node) (:crux.db/id e1))
+
+  (api/entity (api/db node) (:crux.db/id e1))
+
+  (mapv (comp (partial api/document node) :crux.db/content-hash) e-hist)
+
+  (upload-fiddle-data))
+
+
+
+; (t/run-tests 'crux.entity-cache-test)
