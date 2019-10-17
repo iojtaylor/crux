@@ -254,7 +254,7 @@
 (defn- attribute-stats [^ICruxAPI crux-node]
   (success-response (.attributeStats crux-node)))
 
-(def ^:private sparql-available? (try
+(def ^:private sparql-available? (try ; todo be aware of thread-safe requiring-resolve
                                    (require 'crux.sparql.protocol)
                                    true
                                    (catch IOException _
